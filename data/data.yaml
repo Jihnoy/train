@@ -1,6 +1,9 @@
-train: ./dataset/train_list.txt
-val: ./dataset/val_list.txt
 
+train: ./datasets/widerperson/train_list.txt  #
+val: ./datasets/widerperson/val_list.txt  # 5000 images
+
+# number of classes
 nc: 1
 
-names: ['person']
+# class names
+names: [ 'person']
