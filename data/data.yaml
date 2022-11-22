@@ -1,9 +1,10 @@
 
 train: ./datasets/widerperson/train_list.txt  #
-val: ./datasets/widerperson/val_list.txt  # 5000 images
+val: ./datasets/widerperson/val_list.txt  #  images
+test: ./datasets/widerperson/test_list.txt
 
 # number of classes
-nc: 1
+nc: 2
 
 # class names
-names: [ 'person']
+names: ['backgroud', 'person']
