@@ -25,7 +25,7 @@ def remove_prefix(from_string, prefix=WANDB_ARTIFACT_PREFIX):
 
 
 def check_wandb_config_file(data_config_file):
-    wandb_config = '_wandb.'.join(data_config_file.rsplit('.', 1))  # updated data.yaml path
+    wandb_config = '_wandb.'.join(data_config_file.rsplit('.', 1))  # updated data_old.yaml path
     if Path(wandb_config).is_file():
         return wandb_config
     return data_config_file
@@ -203,7 +203,7 @@ class WandbLogger():
             data['train'] = WANDB_ARTIFACT_PREFIX + str(Path(project) / 'train')
         if data.get('val'):
             data['val'] = WANDB_ARTIFACT_PREFIX + str(Path(project) / 'val')
-        path = data_file if overwrite_config else '_wandb.'.join(data_file.rsplit('.', 1))  # updated data.yaml path
+        path = data_file if overwrite_config else '_wandb.'.join(data_file.rsplit('.', 1))  # updated data_old.yaml path
         data.pop('download', None)
         with open(path, 'w') as f:
             yaml.dump(data, f)

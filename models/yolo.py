@@ -19,6 +19,37 @@ try:
 except ImportError:
     thop = None
 
+class DecoupledHead(nn.Module):
+	#代码是参考啥都会一点的老程大佬的 https://blog.csdn.net/weixin_44119362
+    def __init__(self, ch=256, nc=80, width=1.0, anchors=()):
+        super().__init__()
+        self.nc = nc  # number of classes
+        self.nl = len(anchors)  # number of detection layers 3
+        self.na = len(anchors[0]) // 2  # number of anchors 3
+        self.merge = Conv(ch, 256 * width, 1, 1)
+        self.cls_convs1 = Conv(256 * width, 256 * width, 3, 1, 1)
+        self.cls_convs2 = Conv(256 * width, 256 * width, 3, 1, 1)
+        self.reg_convs1 = Conv(256 * width, 256 * width, 3, 1, 1)
+        self.reg_convs2 = Conv(256 * width, 256 * width, 3, 1, 1)
+        self.cls_preds = nn.Conv2d(256 * width, self.nc * self.na, 1)
+        self.reg_preds = nn.Conv2d(256 * width, 4 * self.na, 1)
+        self.obj_preds = nn.Conv2d(256 * width, 1 * self.na, 1)
+
+    def forward(self, x):
+        x = self.merge(x)
+        # 分类=3x3conv + 3x3conv + 1x1convpred
+        x1 = self.cls_convs1(x)
+        x1 = self.cls_convs2(x1)
+        x1 = self.cls_preds(x1)
+        # 回归=3x3conv（共享） + 3x3conv（共享） + 1x1pred
+        x2 = self.reg_convs1(x)
+        x2 = self.reg_convs2(x2)
+        x21 = self.reg_preds(x2)
+        # 置信度=3x3conv（共享）+ 3x3conv（共享） + 1x1pred
+        x22 = self.obj_preds(x2)
+        out = torch.cat([x21, x22, x1], 1)
+        return out
+
 
 class Detect(nn.Module):
     stride = None  # strides computed during build
@@ -27,8 +58,9 @@ class Detect(nn.Module):
     include_nms = False
     concat = False
 
-    def __init__(self, nc=80, anchors=(), ch=()):  # detection layer
+    def __init__(self, nc=80, anchors=(),Decoupled=False, ch=(), ):  # detection layer
         super(Detect, self).__init__()
+        self.decoupled = Decoupled
         self.nc = nc  # number of classes
         self.no = nc + 5  # number of outputs per anchor
         self.nl = len(anchors)  # number of detection layers
@@ -37,8 +69,8 @@ class Detect(nn.Module):
         a = torch.tensor(anchors).float().view(self.nl, -1, 2)
         self.register_buffer('anchors', a)  # shape(nl,na,2)
         self.register_buffer('anchor_grid', a.clone().view(self.nl, 1, -1, 1, 1, 2))  # shape(nl,1,na,1,1,2)
-        self.m = nn.ModuleList(nn.Conv2d(x, self.no * self.na, 1) for x in ch)  # output conv
-
+        #self.m = nn.ModuleList(nn.Conv2d(x, self.no * self.na, 1) for x in ch)  # output conv
+        self.m = nn.ModuleList(DecoupledHead(x, nc, 1, anchors) for x in ch)
     def forward(self, x):
         # x = x.copy()  # for profiling
         z = []  # inference output
@@ -537,7 +569,7 @@ class Model(nn.Module):
             check_anchor_order(m)
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
-            self._initialize_biases()  # only run once
+            #self._initialize_biases()  # only run once
             # print('Strides: %s' % m.stride.tolist())
         if isinstance(m, IDetect):
             s = 256  # 2x min stride
@@ -759,7 +791,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
                  RepResX, RepResXCSPA, RepResXCSPB, RepResXCSPC, 
                  Ghost, GhostCSPA, GhostCSPB, GhostCSPC,
                  SwinTransformerBlock, STCSPA, STCSPB, STCSPC,
-                 SwinTransformer2Block, ST2CSPA, ST2CSPB, ST2CSPC, CBAM, CA]:
+                 SwinTransformer2Block, ST2CSPA, ST2CSPB, ST2CSPC, CBAM, CA, CBH, LC_Block, ConvNextBlock, Dense]:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
                 c2 = make_divisible(c2 * gw, 8)
@@ -777,6 +809,13 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
                      ST2CSPA, ST2CSPB, ST2CSPC]:
                 args.insert(2, n)  # number of repeats
                 n = 1
+        elif m in [CBH, LC_Block, ConvNextBlock, Dense]:
+            c1, c2 = ch[f], args[0]
+            if c2 != no:  # if not output
+                c2 = make_divisible(c2 * gw, 8)
+
+            args = [c1, c2, *args[1:]]
+
         elif m is nn.BatchNorm2d:
             args = [ch[f]]
         elif m is Concat:
@@ -795,8 +834,16 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             c2 = ch[f] * 4
         elif m is Contract:
             c2 = ch[f] * args[0] ** 2
+        elif m is space_to_depth:
+            c2 = 4 * ch[f]
         elif m is Expand:
             c2 = ch[f] // args[0] ** 2
+        elif m in [ODConv]:
+            c1, c2 = ch[f], args[0]
+            if c2 != no:  # if not output
+                c2 = make_divisible(c2 * gw, 8)
+
+            args = [c1, c2, *args[1:]]
         else:
             c2 = ch[f]
 

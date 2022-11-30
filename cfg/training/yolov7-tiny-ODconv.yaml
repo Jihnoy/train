@@ -103,7 +103,7 @@ head:
    [-1, 1, Conv, [128, 1, 1, None, 1, nn.LeakyReLU(0.1)]],
    [-2, 1, Conv, [128, 1, 1, None, 1, nn.LeakyReLU(0.1)]],
    [-1, 1, Conv, [128, 3, 1, None, 1, nn.LeakyReLU(0.1)]],
-   [-1, 1, Conv, [128, 3, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [-1, 1, ODConv, [128, 3, 1]],
    [[-1, -2, -3, -4], 1, Concat, [1]],
    [-1, 1, Conv, [256, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 73
       

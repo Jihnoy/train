@@ -505,7 +505,21 @@ def train(hyp, opt, device, tb_writer=None):
                                           plots=False,
                                           is_coco=is_coco,
                                           v5_metric=opt.v5_metric)
-
+        else :
+            for m in (last, best) if best.exists() else (last):  # speed, mAP tests
+                results, _, _ = test.test(opt.data,
+                                          batch_size=batch_size * 2,
+                                          imgsz=imgsz_test,
+                                          conf_thres=0.001,
+                                          iou_thres=0.2,
+                                          model=attempt_load(m, device).half(),
+                                          single_cls=opt.single_cls,
+                                          dataloader=testloader,
+                                          save_dir=save_dir,
+                                          save_json=True,
+                                          plots=False,
+                                          is_coco=is_coco,
+                                          v5_metric=opt.v5_metric)
         # Strip optimizers
         final = best if best.exists() else last  # final model
         for f in last, best:
@@ -526,13 +540,13 @@ def train(hyp, opt, device, tb_writer=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', type=str, default='yolov7-tiny.pt', help='initial weights path')
+    parser.add_argument('--weights', type=str, default='', help='initial weights path')
     parser.add_argument('--cfg', type=str, default='', help='model.yaml path')
-    parser.add_argument('--data', type=str, default='data/data.yaml', help='data.yaml path')
-    parser.add_argument('--hyp', type=str, default='data/hyp.scratch.custom.yaml', help='hyperparameters path')
+    parser.add_argument('--data', type=str, default='data/data.yaml', help='data_old.yaml path')
+    parser.add_argument('--hyp', type=str, default='data/hyp.scratch.tiny.yaml', help='hyperparameters path')
     parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--batch-size', type=int, default=16, help='total batch size for all GPUs')
-    parser.add_argument('--img-size', nargs='+', type=int, default=[640, 640], help='[train, test] image sizes')
+    parser.add_argument('--img-size', nargs='+', type=int, default=[512, 512], help='[train, test] image sizes')
     parser.add_argument('--rect', action='store_true', help='rectangular training')
     parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume most recent training')
     parser.add_argument('--nosave', action='store_true', help='only save final checkpoint')

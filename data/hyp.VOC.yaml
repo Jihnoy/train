@@ -1,0 +1,31 @@
+lr0: 0.0033
+lrf: 0.15184
+momentum: 0.74747
+weight_decay: 0.00025
+warmup_epochs: 3.4278
+warmup_momentum: 0.59032
+warmup_bias_lr: 0.18742
+box: 0.02
+cls: 0.21563
+cls_pw: 0.5
+obj: 0.50843
+obj_pw: 0.6729
+iou_t: 0.2
+anchor_t: 3.4172
+fl_gamma: 0.0
+hsv_h: 0.01032
+hsv_s: 0.5562
+hsv_v: 0.28255
+degrees: 0.0
+translate: 0.04575
+scale: 0.73711
+shear: 0.0
+perspective: 0.0
+flipud: 0.0
+fliplr: 0.5
+mosaic: 0.87158
+mixup: 0.04294
+copy_paste: 0.0
+anchors: 3.3556
+paste_in: 0.05  # image copy paste (probability), use 0 for faster training
+loss_ota: 1 # use ComputeLossOTA, use 0 for faster training

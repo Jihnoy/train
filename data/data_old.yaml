@@ -1,0 +1,10 @@
+
+train: ./datasets/widerperson/train_list.txt  # 6400
+val: ./datasets/widerperson/val_list.txt  #  images from train images 1600
+test: ./datasets/widerperson/val_list.txt #origin val
+
+# number of classes
+nc: 1
+
+# class names
+names: ['person']
