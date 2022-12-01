@@ -17,7 +17,65 @@ from utils.general import non_max_suppression, make_divisible, scale_coords, inc
 from utils.plots import color_list, plot_one_box
 from utils.torch_utils import time_synchronized
 from models.odconv import ODConv, ODConv2d
+from models.GhostV2 import Ghostblockv2
 
+
+def get_dwconv(dim, kernel, bias):
+    return nn.Conv2d(dim, dim, kernel_size=kernel, padding=(kernel - 1) // 2, bias=bias, groups=dim)
+class gnconv(nn.Module):
+    def __init__(self, dim, order=5, gflayer=None, h=14, w=8, s=1.0):
+        super().__init__()
+        self.order = order
+        self.dims = [dim // 2 ** i for i in range(order)]
+        self.dims.reverse()
+        self.proj_in = nn.Conv2d(dim, 2 * dim, 1)
+
+        if gflayer is None:
+            self.dwconv = get_dwconv(sum(self.dims), 7, True)
+        else:
+            self.dwconv = gflayer(sum(self.dims), h=h, w=w)
+
+        self.proj_out = nn.Conv2d(dim, dim, 1)
+
+        self.pws = nn.ModuleList(
+            [nn.Conv2d(self.dims[i], self.dims[i + 1], 1) for i in range(order - 1)]
+        )
+        self.scale = s
+
+    def forward(self, x, mask=None, dummy=False):
+        # B, C, H, W = x.shape gnconv [512]by iscyy/air
+        fused_x = self.proj_in(x)
+        pwa, abc = torch.split(fused_x, (self.dims[0], sum(self.dims)), dim=1)
+        dw_abc = self.dwconv(abc) * self.scale
+        dw_list = torch.split(dw_abc, self.dims, dim=1)
+        x = pwa * dw_list[0]
+        for i in range(self.order - 1):
+            x = self.pws[i](x) * dw_list[i + 1]
+        x = self.proj_out(x)
+
+        return x
+class C3(nn.Module):
+    # CSP Bottleneck with 3 convolutions
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c1, c_, 1, 1)
+        self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
+        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
+
+    def forward(self, x):
+        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
+
+class C3GhostV2(C3):
+    # C3GV2 module with GhostV2(for iscyy)
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.c1_ = 16
+        self.c2_ = 16 * e
+        c_ = int(c2 * e)
+        self.m = nn.Sequential(*(Ghostblockv2(c_, self.c1_, c_) for _ in range(n)))
+# C3 Ghost
 ##### basic ####
 
 def autopad(k, p=None):  # kernel, padding
@@ -2333,18 +2391,6 @@ class C3(nn.Module):
     def forward(self, x):
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1))
 
-class ResElan(nn.Module):
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super(ResElan, self).__init__()
-        c_ = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c1, c_, 1, 1)
-        self.cv3 = Conv(2 * c_, c2, 1)  # act=FReLU(c2)
-        self.m = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
-        # self.m = nn.Sequential(*[CrossConv(c_, c_, 3, 1, g, 1.0, shortcut) for _ in range(n)])
-
-    def forward(self, x):
-        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)) ,dim=1))
 
 class space_to_depth(nn.Module):
     # Changing the dimension of the Tensor
@@ -2354,3 +2400,190 @@ class space_to_depth(nn.Module):
 
     def forward(self, x):
          return torch.cat([x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]], 1)
+
+
+class CNELAN(nn.Module):
+    """
+    ELAN BLock of YOLOv7's backbone
+    """
+    def __init__(self, c1, c2, e=0.5, depthwise=False):
+        super(CNELAN, self).__init__()
+        c_ = int(c2 * e)
+        self.cv1 = Conv(c1, c_, k=1, s=1,  g=1, act=nn.LeakyReLU(0.1))
+        self.cv2 = Conv(c1, c_, k=1, s=1,  g=1, act=nn.LeakyReLU(0.1))
+        self.cv3 = Conv(c_, c_, k=3)
+        self.cv4 = ConvNextBlock(c_)
+        self.out = Conv(4*c_, c2, k=1)
+
+    def forward(self, x):
+        """
+        Input:
+            x: [B, C, H, W]
+        Output:
+            out: [B, 2C, H, W]
+        """
+        x1 = self.cv1(x)
+        x2 = self.cv2(x)
+        x3 = self.cv3(x2)
+        x4 = self.cv4(x3)
+        # [B, C, H, W] -> [B, 2C, H, W]
+        return self.out(torch.cat([x1, x2, x3, x4], dim=1))
+
+
+class GlobalLocalFilter(nn.Module):
+    def __init__(self, dim, h=14, w=8):
+        super().__init__()
+        self.dw = nn.Conv2d(dim // 2, dim // 2, kernel_size=3, padding=1, bias=False, groups=dim // 2)
+        self.complex_weight = nn.Parameter(torch.randn(dim // 2, h, w, 2, dtype=torch.float32) * 0.02)
+        nn.init.trunc_normal_(self.complex_weight, std=.02)
+        self.pre_norm = HorLayerNorm(dim, eps=1e-6, data_format='channels_first')
+        self.post_norm = HorLayerNorm(dim, eps=1e-6, data_format='channels_first')
+
+    def forward(self, x):
+        x = self.pre_norm(x)
+        x1, x2 = torch.chunk(x, 2, dim=1)
+        x1 = self.dw(x1)
+
+        x2 = x2.to(torch.float32)
+        B, C, a, b = x2.shape  # dummy
+        x2 = torch.fft.rfft2(x2, dim=(2, 3), norm='ortho')
+
+        weight = self.complex_weight
+        if not weight.shape[1:3] == x2.shape[2:4]:
+            weight = F.interpolate(weight.permute(3, 0, 1, 2), size=x2.shape[2:4], mode='bilinear',
+                                   align_corners=True).permute(1, 2, 3, 0)
+
+        weight = torch.view_as_complex(weight.contiguous())
+
+        x2 = x2 * weight
+        x2 = torch.fft.irfft2(x2, s=(a, b), dim=(2, 3), norm='ortho')
+
+        x = torch.cat([x1.unsqueeze(2), x2.unsqueeze(2)], dim=2).reshape(B, 2 * C, a, b)
+        x = self.post_norm(x)
+        return x
+
+
+class gnconv(nn.Module):
+    def __init__(self, dim, order=5, gflayer=GlobalLocalFilter, h=14, w=8, s=1.0):
+        super().__init__()
+        self.order = order
+        self.dims = [dim // 2 ** i for i in range(order)]
+        self.dims.reverse()
+        self.proj_in = nn.Conv2d(dim, 2 * dim, 1)
+
+        if gflayer is None:
+            self.dwconv = get_dwconv(sum(self.dims), 7, True)
+        else:
+            self.dwconv = gflayer(sum(self.dims), h=h, w=w)
+
+        self.proj_out = nn.Conv2d(dim, dim, 1)
+
+        self.pws = nn.ModuleList(
+            [nn.Conv2d(self.dims[i], self.dims[i + 1], 1) for i in range(order - 1)]
+        )
+        self.scale = s
+
+    def forward(self, x, mask=None, dummy=False):
+        fused_x = self.proj_in(x)
+        pwa, abc = torch.split(fused_x, (self.dims[0], sum(self.dims)), dim=1)
+        dw_abc = self.dwconv(abc) * self.scale
+        dw_list = torch.split(dw_abc, self.dims, dim=1)
+        x = pwa * dw_list[0]
+        for i in range(self.order - 1):
+            x = self.pws[i](x) * dw_list[i + 1]
+        x = self.proj_out(x)
+
+        return x
+
+
+def get_dwconv(dim, kernel, bias):
+    return nn.Conv2d(dim, dim, kernel_size=kernel, padding=(kernel - 1) // 2, bias=bias, groups=dim)
+
+
+class HorLayerNorm(nn.Module):
+    def __init__(self, normalized_shape, eps=1e-6, data_format="channels_last"):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(normalized_shape))
+        self.bias = nn.Parameter(torch.zeros(normalized_shape))
+        self.eps = eps
+        self.data_format = data_format
+        if self.data_format not in ["channels_last", "channels_first"]:
+            raise NotImplementedError  # by iscyy/air
+        self.normalized_shape = (normalized_shape,)
+
+    def forward(self, x):
+        if self.data_format == "channels_last":
+            return F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
+        elif self.data_format == "channels_first":
+            u = x.mean(1, keepdim=True)
+            s = (x - u).pow(2).mean(1, keepdim=True)
+            x = (x - u) / torch.sqrt(s + self.eps)
+            x = self.weight[:, None, None] * x + self.bias[:, None, None]
+            return x
+
+
+class HorBlock(nn.Module):  # HorBlock模块
+    r""" HorNet block yoloair
+    """
+
+    def __init__(self, dim, drop_path=0., layer_scale_init_value=1e-6, gnconv=gnconv):  # dummy
+        super().__init__()
+
+        self.norm1 = HorLayerNorm(dim, eps=1e-6, data_format='channels_first')
+        self.gnconv = gnconv(dim)
+        self.norm2 = HorLayerNorm(dim, eps=1e-6)
+        self.pwconv1 = nn.Linear(dim, 4 * dim)
+        self.act = nn.GELU()
+        self.pwconv2 = nn.Linear(4 * dim, dim)
+        self.gamma1 = nn.Parameter(layer_scale_init_value * torch.ones(dim),
+                                   requires_grad=True) if layer_scale_init_value > 0 else None
+        self.gamma2 = nn.Parameter(layer_scale_init_value * torch.ones((dim)),
+                                   requires_grad=True) if layer_scale_init_value > 0 else None
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+
+    def forward(self, x):
+        B, C, H, W = x.shape  # [512]
+        if self.gamma1 is not None:
+            gamma1 = self.gamma1.view(C, 1, 1)
+        else:
+            gamma1 = 1
+        x = x + self.drop_path(gamma1 * self.gnconv(self.norm1(x)))
+        input = x
+        x = x.permute(0, 2, 3, 1)  # (N, C, H, W) -> (N, H, W, C)
+        x = self.norm2(x)
+        x = self.pwconv1(x)
+        x = self.act(x)
+        x = self.pwconv2(x)
+        if self.gamma2 is not None:
+            x = self.gamma2 * x
+        x = x.permute(0, 3, 1, 2)  # (N, H, W, C) -> (N, C, H, W)
+        x = input + self.drop_path(x)
+        return x
+
+
+class GNELAN(nn.Module):
+    """
+    ELAN BLock of YOLOv7's backbone
+    """
+    def __init__(self, c1, c2, e=0.5, depthwise=False):
+        super(GNELAN, self).__init__()
+        c_ = int(c2 * e)
+        self.cv1 = Conv(c1, c_, k=1, s=1,  g=1, act=nn.LeakyReLU(0.1))
+        self.cv2 = Conv(c1, c_, k=1, s=1,  g=1, act=nn.LeakyReLU(0.1))
+        self.cv3 = gnconv(c_)
+        self.cv4 = gnconv(c_)
+        self.out = Conv(4*c_, c2, k=1)
+
+    def forward(self, x):
+        """
+        Input:
+            x: [B, C, H, W]
+        Output:
+            out: [B, 2C, H, W]
+        """
+        x1 = self.cv1(x)
+        x2 = self.cv2(x)
+        x3 = self.cv3(x2)
+        x4 = self.cv4(x3)
+        # [B, C, H, W] -> [B, 2C, H, W]
+        return self.out(torch.cat([x1, x2, x3, x4], dim=1))
