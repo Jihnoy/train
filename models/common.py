@@ -2203,6 +2203,7 @@ class ConvNextBlock(nn.Module):
         x = x.permute(0, 3, 1, 2)  # (N, H, W, C) -> (N, C, H, W)
 
         x = input + self.drop_path(x)
+        # x = self.drop_path(x)
         return x
 
 class DropPath(nn.Module):

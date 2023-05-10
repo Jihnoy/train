@@ -1,0 +1,11 @@
+
+train: ./datasets/crowdHuman/train_list.txt  # 6400
+val: ./datasets/crowdHuman/val_list.txt  #  images from train images 1600
+#test: ./datasets/widerperson/val_list.txt #origin val
+
+
+#number of classes
+nc: 2
+
+# class names
+names: ['head', 'person']
