@@ -1,16 +1,21 @@
 import argparse
+import os
 import time
 from pathlib import Path
 
 import cv2
+import networks
 import torch
 import torch.backends.cudnn as cudnn
 from numpy import random
-
+from torchvision import transforms
+from evaluate_depth import STEREO_SCALE_FACTOR
+from layers import disp_to_depth
 from models.experimental import attempt_load
-from utils.datasets import LoadStreams, LoadImages, LoadWebcam
+from util import download_model_if_doesnt_exist
+from utils.datasets import LoadStreams, LoadImages
 from utils.general import check_img_size, check_requirements, check_imshow, non_max_suppression, apply_classifier, \
-    scale_coords, xyxy2xywh, strip_optimizer, set_logging, increment_path, draw_measure_line
+    scale_coords, xyxy2xywh, strip_optimizer, set_logging, increment_path
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized, TracedModel
 
@@ -25,7 +30,6 @@ def detect(save_img=False):
     save_dir = Path(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok))  # increment run
     (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
 
-    location = [] #location
     # Initialize
     set_logging()
     device = select_device(opt.device)
@@ -42,6 +46,38 @@ def detect(save_img=False):
     if half:
         model.half()  # to FP16
 
+    # Load distance calculate model
+    model_name = "mono+stereo_640x192"
+    download_model_if_doesnt_exist(model_name)
+    model_path = os.path.join("models", model_name)
+    print("-> Loading model from ", model_path)
+    encoder_path = os.path.join(model_path, "encoder.pth")
+    depth_decoder_path = os.path.join(model_path, "depth.pth")
+
+    # LOADING PRETRAINED MODEL
+    print("   Loading pretrained encoder")
+    encoder = networks.ResnetEncoder(18, False)
+    loaded_dict_enc = torch.load(encoder_path, map_location=device)
+
+    # extract the height and width of image that this model was trained with
+    feed_height = loaded_dict_enc['height']
+    feed_width = loaded_dict_enc['width']
+    filtered_dict_enc = {k: v for k, v in loaded_dict_enc.items() if k in encoder.state_dict()}
+    encoder.load_state_dict(filtered_dict_enc)
+    encoder.to(device)
+    encoder.eval()
+
+    print("   Loading pretrained decoder", feed_width, feed_height)
+    depth_decoder = networks.DepthDecoder(
+        num_ch_enc=encoder.num_ch_enc, scales=range(4))
+
+    loaded_dict = torch.load(depth_decoder_path, map_location=device)
+    depth_decoder.load_state_dict(loaded_dict)
+
+    depth_decoder.to(device)
+    depth_decoder.eval()
+    print(" Loading depth model finish")
+
     # Second-stage classifier
     classify = False
     if classify:
@@ -54,7 +90,6 @@ def detect(save_img=False):
         view_img = check_imshow()
         cudnn.benchmark = True  # set True to speed up constant image size inference
         dataset = LoadStreams(source, img_size=imgsz, stride=stride)
-        # dataset = LoadWebcam(source, imgsz, stride)
     else:
         dataset = LoadImages(source, img_size=imgsz, stride=stride)
 
@@ -70,6 +105,10 @@ def detect(save_img=False):
 
     t0 = time.time()
     for path, img, im0s, vid_cap in dataset:
+        # Generate Depth map
+        depth = depth_predict(im0s, encoder, depth_decoder, feed_width, feed_height, device)
+
+
         img = torch.from_numpy(img).to(device)
         img = img.half() if half else img.float()  # uint8 to fp16/32
         img /= 255.0  # 0 - 255 to 0.0 - 1.0
@@ -77,7 +116,8 @@ def detect(save_img=False):
             img = img.unsqueeze(0)
 
         # Warmup
-        if device.type != 'cpu' and (old_img_b != img.shape[0] or old_img_h != img.shape[2] or old_img_w != img.shape[3]):
+        if device.type != 'cpu' and (
+                old_img_b != img.shape[0] or old_img_h != img.shape[2] or old_img_w != img.shape[3]):
             old_img_b = img.shape[0]
             old_img_h = img.shape[2]
             old_img_w = img.shape[3]
@@ -86,7 +126,7 @@ def detect(save_img=False):
 
         # Inference
         t1 = time_synchronized()
-        with torch.no_grad():   # Calculating gradients would cause a GPU memory leak
+        with torch.no_grad():  # Calculating gradients would cause a GPU memory leak
             pred = model(img, augment=opt.augment)[0]
         t2 = time_synchronized()
 
@@ -112,7 +152,6 @@ def detect(save_img=False):
             if len(det):
                 # Rescale boxes from img_size to im0 size
                 det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
-
                 # Print results
                 for c in det[:, -1].unique():
                     n = (det[:, -1] == c).sum()  # detections per class
@@ -127,32 +166,17 @@ def detect(save_img=False):
                             f.write(('%g ' * len(line)).rstrip() % line + '\n')
 
                     if save_img or view_img:  # Add bbox to image
-                        label = f'{names[int(cls)]} {conf:.2f}'
-
-                        # 内参
-                        intrinsics_matrix = [9.45155324e+02, 5.48110750e+02,
-                                             1.48410656e+03, 1.43442748e+03]  # cx,cy,fx,fy
-
+                        distance = calculate_rev(depth, xyxy)
+                        label = f'{names[int(cls)]} {conf:.2f} {distance:.2f}'
                         plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=1)
-
-                        # 计算并绘制结果
-                        xyz_in_camera = draw_measure_line(xyxy, im0, size=2, color=colors[int(cls)], label=cls,
-                                                          intrinsics_matrix=intrinsics_matrix)
-
-                        location.append(xyz_in_camera)
 
             # Print time (inference + NMS)
             print(f'{s}Done. ({(1E3 * (t2 - t1)):.1f}ms) Inference, ({(1E3 * (t3 - t2)):.1f}ms) NMS')
 
             # Stream results
             if view_img:
-                # cv2.imshow(str(p), im0)
-                # cv2.waitKey(1)  # 1 millisecond
-                cv2.namedWindow("Webcam", cv2.WINDOW_NORMAL)
-                cv2.resizeWindow("Webcam", 1280, 720)
-                cv2.moveWindow("Webcam", 0, 100)
-                cv2.imshow("Webcam", im0)
-                cv2.waitKey(1)
+                cv2.imshow(str(p), im0)
+                cv2.waitKey(1)  # 1 millisecond
 
             # Save results (image with detections)
             if save_img:
@@ -176,14 +200,61 @@ def detect(save_img=False):
 
     if save_txt or save_img:
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
-        #print(f"Results saved to {save_dir}{s}")
+        # print(f"Results saved to {save_dir}{s}")
 
     print(f'Done. ({time.time() - t0:.3f}s)')
 
 
+def depth_predict(image_path, encoder, depth_decoder, feed_width=None, feed_height=None, device=None):
+    original_width, original_height = image_path.shape[1], image_path.shape[0]
+
+    # PREDICTING ON EACH IMAGE IN TURN
+    with torch.no_grad():
+        print("In function :", original_width, original_height)
+        # Load image and preprocess
+        image_path = cv2.resize(image_path, (feed_width, feed_height), cv2.INTER_LANCZOS4)
+        image_path = transforms.ToTensor()(image_path).unsqueeze(0)
+
+        # PREDICTION, encoder and decoder
+        image_path = image_path.to(device)
+        features = encoder(image_path)
+        outputs = depth_decoder(features)
+
+        disp = outputs[("disp", 0)]
+        disp_resized = torch.nn.functional.interpolate(
+            disp, (original_height, original_width), mode="bilinear", align_corners=False)
+
+        scaled_disp, depth = disp_to_depth(disp, 0.1, 3)
+        metric_depth = STEREO_SCALE_FACTOR * depth.cpu().numpy()
+
+        metric_depth = resize_depth_map(metric_depth, original_width, original_height)
+
+        return metric_depth
+
+
+def resize_depth_map(metric_depth, original_width, original_height):
+    metric_depth = torch.from_numpy(metric_depth)
+    metric_depth_resized = torch.nn.functional.interpolate(metric_depth,
+                                                           (original_height, original_width), mode="bilinear",
+                                                           align_corners=False)
+
+    # Saving colormapped depth image
+    metric_depth_resized_np = metric_depth_resized.squeeze().cpu().numpy()
+    return metric_depth_resized_np
+
+
+def calculate_rev(depth_map, xyxy):
+    x = int((xyxy[0] + xyxy[2]) / 2)
+    y = int((xyxy[1] + xyxy[3]) / 2)
+    rev = depth_map[y, x]
+    return rev
+
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default='CrowdHuman/Used/weights/best.pt', help='model.pt path(s)')
+    parser.add_argument('--weights', nargs='+', type=str, default='CrowdHuman/Used/weights/best.pt',
+                        help='model.pt path(s)')
     parser.add_argument('--source', type=str, default='detectAuto/test', help='source')  # file/folder, 0 for webcam
     parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.7, help='object confidence threshold')
@@ -203,7 +274,7 @@ if __name__ == '__main__':
     parser.add_argument('--no-trace', action='store_true', help='don`t trace model')
     opt = parser.parse_args()
     print(opt)
-    #check_requirements(exclude=('pycocotools', 'thop'))
+    # check_requirements(exclude=('pycocotools', 'thop'))
 
     with torch.no_grad():
         if opt.update:  # update all models (to fix SourceChangeWarning)

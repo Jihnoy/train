@@ -904,7 +904,7 @@ def draw_measure_line(xyxy, img, size, label, intrinsics_matrix, color):
     """
 
     h = 1.86  # 相机地面高度 1.75 m
-    alpha = 20 # 角度a
+    alpha = 25 # 角度a
 
     # 这个这是绘制测距线用的，没什么用。你需要按照真实位置计算出地面线在图像中的位置，否则绘制出来也仅仅是个参考
     # 这个与你测量结果无关，不理解的话注释掉即可
@@ -922,8 +922,8 @@ def draw_measure_line(xyxy, img, size, label, intrinsics_matrix, color):
     filter_list = [] # 过滤一些我不想要的类别
     if label not in filter_list:
 
-        y = int(xyxy[3])
-        x = int((xyxy[0] + xyxy[2]) / 2)
+        y = int((xyxy[1] + xyxy[3]) / 2 )##top
+        x = int((xyxy[0] + xyxy[2]) / 2) ##mid
 
         color_ground_point = (255 - np.array(color)).tolist()
         cv2.circle(img, (x, y) , 8, color_ground_point, thickness=-1)
