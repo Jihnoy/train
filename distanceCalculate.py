@@ -4,6 +4,8 @@ import time
 from pathlib import Path
 
 import cv2
+import numpy as np
+
 import networks
 import torch
 import torch.backends.cudnn as cudnn
@@ -106,8 +108,6 @@ def detect(save_img=False):
     t0 = time.time()
     for path, img, im0s, vid_cap in dataset:
         # Generate Depth map
-        depth = depth_predict(im0s, encoder, depth_decoder, feed_width, feed_height, device)
-
 
         img = torch.from_numpy(img).to(device)
         img = img.half() if half else img.float()  # uint8 to fp16/32
@@ -144,7 +144,7 @@ def detect(save_img=False):
                 p, s, im0, frame = path[i], '%g: ' % i, im0s[i].copy(), dataset.count
             else:
                 p, s, im0, frame = path, '', im0s, getattr(dataset, 'frame', 0)
-
+            depth = depth_predict(im0, encoder, depth_decoder, feed_width, feed_height, device)
             p = Path(p)  # to Path
             save_path = str(save_dir / p.name)  # img.jpg
             txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # img.txt
@@ -167,7 +167,7 @@ def detect(save_img=False):
 
                     if save_img or view_img:  # Add bbox to image
                         distance = calculate_rev(depth, xyxy)
-                        label = f'{names[int(cls)]} {conf:.2f} {distance:.2f}'
+                        label = f'{names[int(cls)]} {conf:.2f} {distance:.2f}m'
                         plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=1)
 
             # Print time (inference + NMS)
@@ -176,7 +176,8 @@ def detect(save_img=False):
             # Stream results
             if view_img:
                 cv2.imshow(str(p), im0)
-                cv2.waitKey(1)  # 1 millisecond
+                if cv2.waitKey(1) == ord('q'):
+                    break
 
             # Save results (image with detections)
             if save_img:
@@ -210,7 +211,6 @@ def depth_predict(image_path, encoder, depth_decoder, feed_width=None, feed_heig
 
     # PREDICTING ON EACH IMAGE IN TURN
     with torch.no_grad():
-        print("In function :", original_width, original_height)
         # Load image and preprocess
         image_path = cv2.resize(image_path, (feed_width, feed_height), cv2.INTER_LANCZOS4)
         image_path = transforms.ToTensor()(image_path).unsqueeze(0)
@@ -221,12 +221,10 @@ def depth_predict(image_path, encoder, depth_decoder, feed_width=None, feed_heig
         outputs = depth_decoder(features)
 
         disp = outputs[("disp", 0)]
-        disp_resized = torch.nn.functional.interpolate(
-            disp, (original_height, original_width), mode="bilinear", align_corners=False)
 
-        scaled_disp, depth = disp_to_depth(disp, 0.1, 3)
-        metric_depth = STEREO_SCALE_FACTOR * depth.cpu().numpy()
-
+        # scaled_disp, depth = disp_to_depth(disp, 0.05, 2)
+        scaled_disp, depth = disp_to_depth(disp, 0.05, 100)
+        metric_depth = STEREO_SCALE_FACTOR*depth.cpu().numpy()
         metric_depth = resize_depth_map(metric_depth, original_width, original_height)
 
         return metric_depth
