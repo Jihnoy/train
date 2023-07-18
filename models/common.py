@@ -2405,7 +2405,7 @@ class space_to_depth(nn.Module):
 
 class CNELAN(nn.Module):
     """
-    ELAN BLock of YOLOv7's backbone
+    ELAN BLock of yolov7's backbone
     """
     def __init__(self, c1, c2, e=0.5, depthwise=False):
         super(CNELAN, self).__init__()
@@ -2564,7 +2564,7 @@ class HorBlock(nn.Module):  # HorBlock模块
 
 class GNELAN(nn.Module):
     """
-    ELAN BLock of YOLOv7's backbone
+    ELAN BLock of yolov7's backbone
     """
     def __init__(self, c1, c2, e=0.5, depthwise=False):
         super(GNELAN, self).__init__()

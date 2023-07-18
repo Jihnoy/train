@@ -1,6 +1,11 @@
+import os
+import re
 import sys
+from functools import partial
+
 import pandas as pd
 import numpy as np
+from PyQt5.QtMultimedia import QSound
 from pygame.locals import *
 import pygame
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QHBoxLayout, QPushButton, QLabel, QVBoxLayout, \
@@ -20,25 +25,28 @@ class MyButton(QPushButton):
 
     def enterEvent(self, event):
         self.setStyleSheet(
-            f"border-radius: 2px; border: 2px solid black; background-color: {self.color}; color: white;")
+            f"border-radius: 2px; border: 2px solid black; background-color: {self.color}; color: white;font-size:25px")
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         self.setStyleSheet(
-            f"border-radius: 2px; border: 2px solid black; background-color: {self.color}; color: black;")
+            f"border-radius: 2px; border: 2px solid black; background-color: {self.color}; color: black; font-size:25px")
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
-        self.setStyleSheet(f"border-radius: 2px; border: 2px solid red; background-color: {self.color}; color: white;")
+        self.setStyleSheet(f"border-radius: 2px; border: 2px solid red; background-color: {self.color}; color: white;"
+                           f"font-size:25px")
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
         self.setStyleSheet(
-            f"border-radius: 2px; border: 2px solid black; background-color: {self.color}; color: black;")
+            f"border-radius: 2px; border: 2px solid black; background-color: {self.color}; color: black;"
+            f"font-size:25px")
         super().mouseReleaseEvent(event)
 
 
 class MyWidget(QWidget):
+    button_clicked = pyqtSignal(str)
 
     def __init__(self, name):
         super().__init__()
@@ -92,7 +100,7 @@ class MyWidget(QWidget):
         elif name == 'Y':
             self.button = MyButton("Y", "transparent", self)  # 黄FFFF00
 
-        self.button.clicked.connect(self.on_button_clicked)
+        self.button.clicked.connect(partial(self.on_button_clicked, name))
         self.update_button_geometry()
 
     def set_button(self, name):
@@ -124,8 +132,11 @@ class MyWidget(QWidget):
                      self.custom_width, self.custom_height)  # 调整矩形框的位置和大小
         painter.drawRect(rect)  # 绘制矩形框
 
-    def on_button_clicked(self):
+    def on_button_clicked(self, name):
+        self.button_clicked.emit(name)
         # 切换界面的背景色
+
+    def color_change(self):
         self.choose_time += 1
         if self.choose_time == 1:
             self.label.setText(f"再次点击按钮{self.windowTitle()}以选择\n確もう一度選択して確認します"
@@ -186,11 +197,15 @@ class MainWindow(QMainWindow):
         self.button.setGeometry(20, 20, 100, 30)  # 设置按钮的位置和大小
         self.button.clicked.connect(self.reset_widgets)  # 连接按钮的点击信号到重置界面的槽函数
 
-        self.experiment_results = pd.DataFrame(columns=['Participant zone', 'L0R1', 'A', 'B', 'X', 'Y'])
+        self.experiment_results = pd.DataFrame(columns=['Participant zone', 'L0R1', 'Time', 'A', 'B', 'X', 'Y'])
         # 导出数据
         self.export_button = QPushButton("导出数据", self)
         self.export_button.setGeometry(1800, 20, 100, 30)
         self.export_button.clicked.connect(self.export_experiment_results)
+
+        self.start_button = QPushButton("Start", self)
+        self.start_button.setGeometry(1650, 20, 100, 30)
+        self.start_button.clicked.connect(self.toggle_timer)
 
         self.data_table = QTableView(self)  # 创建 QTableView 用于显示数据
         self.data_table.setGeometry(500, 0, 1000, 150)  # 设置 QTableView 的位置和大小
@@ -210,12 +225,12 @@ class MainWindow(QMainWindow):
         self.add_data_button.clicked.connect(self.delete_last_data)
         # 记录选择区域
         self.selected = None
-        self.ex_data = np.zeros(4)  # 区域选择情况，-1代表已经选择过，0代表未选择，1代表当前选择，初始化为全0
+        self.ex_data = np.zeros(4, dtype=np.int8)  # 区域选择情况，-1代表已经选择过，0代表未选择，1代表当前选择，初始化为全0
         self.btn_time = 0
-        # 记录实验者所在距离区域和
-        self.zone_lr = np.zeros(2)  # 实验者所在区域zone：1、2、3，实验者从左侧进入0，右侧进入1
-        self.zone = [1, 2, 3]  # 区域1，2，3
-        self.lr = [0, 0, 0]  # 位于左侧右侧
+        # 记录实验者所在距离区域和选择所需时间
+        self.zone_lr_t = np.zeros(3)  # 实验者所在区域zone：1、2、3，实验者从左侧进入0，右侧进入1
+        self.zone = [1, 2, 3, 4, 5, 6]  # 区域1，2，3, 4, 5, 6
+        self.lr = [0, 0, 0, 0, 0, 0]  # 位于左侧右侧
         self.ex_timer = QTimer()
         self.start_time = None
         # self.ex_timer.timeout.connect(self.update_timer)
@@ -234,20 +249,23 @@ class MainWindow(QMainWindow):
             self.timer.start(10)  # 设置定时器的间隔时间，单位为毫秒
 
     def process_joystick_events(self):
-        operate = [0, 1, 2, 3]
-        name = ['A', 'B', 'X', 'Y']
+        operate = [16, 18]
+       
         for event in pygame.event.get():
             if event.type == pygame.JOYBUTTONDOWN:
-                if event.button not in operate:
-                    self.btn_time = 0
+                print("按下手柄按钮:", event.button  )
+                if event.button in operate:
                     self.toggle_timer()
-                    # if self.selected is not None:
-                    #     self.cancel_operate(self.selected, False)
-                    # else:
-                    #     pass
-                else:
-                    self.selected = name[event.button]
-                    self.select_widget(self.selected)
+                # if   event.button not in operate:
+                #     self.btn_time = 0
+                #     self.toggle_timer()
+                #     # if self.selected is not None:
+                #     #     self.cancel_operate(self.selected, False)
+                #     # else:
+                #     #     pass
+                # else:
+                #     self.selected = name[event.button]
+                #     self.select_widget(self.selected)
             elif event.type == pygame.JOYBUTTONUP:
                 print("释放手柄按钮:", event.button)
 
@@ -257,10 +275,8 @@ class MainWindow(QMainWindow):
                 self.ex_data[i] = -1
             if widget.windowTitle() == name:
                 if widget.is_gray:
-                    widget.on_button_clicked()
+                    widget.color_change()
                     self.btn_time += 1
-                    if self.btn_time == 1:
-                        self.toggle_timer()
                     if self.btn_time == 2:
                         self.btn_time = 0
 
@@ -283,12 +299,16 @@ class MainWindow(QMainWindow):
         # 创建并添加四个交互界面
         for name in ['A', 'B', 'X', 'Y']:
             widget = MyWidget(name)
+            widget.button_clicked.connect(self.handle_button_clicked)
             layout.addWidget(widget)
             self.widgets.append(widget)
 
+    def handle_button_clicked(self, name):
+        self.select_widget(name)
+
     def reset_widgets(self):
-        self.reset_count += 1  # 增加重置计数器的值
-        if self.reset_count < 3:  # 移除并销毁当前的子窗口
+        self.reset_count += 1  # 增加重置计数器的值(实验次数)
+        if self.reset_count < len(self.zone):  # 移除并销毁当前的子窗口:  # 移除并销毁当前的子窗口
             for widget in self.widgets:
                 widget.setParent(None)
                 widget.deleteLater()
@@ -299,7 +319,7 @@ class MainWindow(QMainWindow):
             self.create_widgets(layout)  # 创建新的子窗口并添加到布局
 
             self.update()  # 更新主窗口
-            self.zone_lr = np.zeros(2)
+            self.zone_lr_t = np.zeros(3)
             self.ex_data = np.zeros(4)
 
             # 输出重置信息
@@ -321,7 +341,7 @@ class MainWindow(QMainWindow):
                 self.create_widgets(layout)  # 创建新的子窗口并添加到布局
 
                 self.update()  # 更新主窗口
-                self.zone_lr = np.zeros(2)
+                self.zone_lr_t = np.zeros(3)
                 self.ex_data = np.zeros(4)
 
                 # 输出重置信息
@@ -329,9 +349,9 @@ class MainWindow(QMainWindow):
 
     def add_data_to_experiment(self):
         # 将当前实验数据添加到总实验结果中
-        self.zone_lr[0] = self.zone[self.reset_count]
-        self.zone_lr[1] = self.lr[self.reset_count]
-        data = np.concatenate((self.zone_lr, self.ex_data))
+        self.zone_lr_t[0] = self.zone[self.reset_count]
+        self.zone_lr_t[1] = self.lr[self.reset_count]
+        data = np.concatenate((self.zone_lr_t, self.ex_data))
         print(data)
         self.experiment_results = self.experiment_results.append(
             pd.Series(data, index=self.experiment_results.columns),
@@ -345,9 +365,29 @@ class MainWindow(QMainWindow):
         self.zone_lr[0] = start_area
 
     def export_experiment_results(self):
+        if not os.path.exists("result"):
+            os.makedirs("result")
+
+            # 获取结果文件夹中已有的结果文件名列表
+        result_files = os.listdir("result")
+
+        # 提取文件名中的数字部分
+        numbers = [re.findall(r'\d+', filename) for filename in result_files]
+        numbers = [int(num[0]) for num in numbers if num]  # 过滤出包含数字的文件名
+
+        # 确定下一个文件名
+        if numbers:
+            next_number = max(numbers) + 1
+        else:
+            next_number = 1
+
+        # 生成新的结果文件名
+        filename = f"result{next_number}.csv"
+
         # 导出实验结果到CSV文件
-        self.experiment_results.to_csv("experiment_results.csv", index=False)
-        print("实验结果已导出为experiment_results.csv文件。")
+        self.experiment_results.to_csv(os.path.join("result", filename), index=False)
+
+        print(f"实验结果已导出为{filename}文件，保存在result文件夹中。")
 
     def delete_last_data(self):
         if not self.experiment_results.empty:
@@ -390,15 +430,18 @@ class MainWindow(QMainWindow):
 
     def toggle_timer(self):
         if self.start_time is None:
+            QSound.play("tip.wav")  # 开始计时时播放声音
             self.start_time = QDateTime.currentDateTime()
             self.ex_timer.start(1)
         else:
             self.ex_timer.stop()
             if self.start_time is not None:
                 end_time = QDateTime.currentDateTime()
-                elapsed = self.start_time.msecsTo(end_time)
-                print("Elapsed time:", elapsed)
+                elapsed = self.start_time.msecsTo(end_time) / 1000
+                self.zone_lr_t[2] = elapsed
+                print(f"Elapsed time:{self.zone_lr_t[2]}s")
                 self.start_time = None
+                QSound.play("close.wav")
 
 
 if __name__ == "__main__":
