@@ -1,13 +1,18 @@
 import pandas as pd
 import numpy as np
 
+# df = pd.read_csv("result/FinalResult.csv")
+# # 假设数据存储在名为df的DataFrame中
+# new_df = df[df['result'].isin([1, 2])]  # 使用布尔索引选择"result"列中值为1和2的行
+# print(new_df)
+# # 将提取的行保存为新的CSV文件
+# new_df.to_csv('result_mid.csv', index=False)
 df = pd.read_csv("result/FinalResult.csv")
 # 假设数据存储在名为df的DataFrame中
-new_df = df[df['result'].isin([1, 2])]  # 使用布尔索引选择"result"列中值为1和2的行
+new_df = df[df['result'].isin([0, 3])]  # 使用布尔索引选择"result"列中值为1和2的行
 print(new_df)
 # 将提取的行保存为新的CSV文件
-new_df.to_csv('result_mid.csv', index=False)
-
+new_df.to_csv('result_side.csv', index=False)
 #
 # df['result'] = None
 #

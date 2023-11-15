@@ -27,6 +27,6 @@ plt.plot(time_labels, time_distribution.values, marker='o')
 plt.title('Time Distribution')
 plt.xlabel('Time Interval')
 plt.ylabel('Count')
-plt.savefig('time_zone56.svg', format='svg')
+plt.savefig('time_zone56.png', format='png')
 # 显示图形
 plt.show()

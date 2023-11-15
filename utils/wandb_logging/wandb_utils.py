@@ -11,14 +11,14 @@ from utils.datasets import LoadImagesAndLabels
 from utils.datasets import img2label_paths
 from utils.general import colorstr, xywh2xyxy, check_dataset
 
-try:
-    import wandb
-    from wandb import init, finish
-except ImportError:
-    wandb = None
-
+# try:
+#     import wandb
+#     from wandb import init, finish
+# except ImportError:
+#     wandb = None
+#
 WANDB_ARTIFACT_PREFIX = 'wandb-artifact://'
-
+wandb = None
 
 def remove_prefix(from_string, prefix=WANDB_ARTIFACT_PREFIX):
     return from_string[len(prefix):]
